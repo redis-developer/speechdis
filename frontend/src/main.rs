@@ -1,6 +1,5 @@
 // requires the serde and anyhow crates
 
-use serde::Deserialize;
 use yew::services::fetch::{FetchService, FetchTask, Request, Response};
 use yew::{
     format::{Json, Nothing},
@@ -59,7 +58,7 @@ impl FetchServiceExample {
     }
     fn view_file(data: &ApiAIModel) -> Html {
         html! {
-            <li>{ format!("Latitude: {:?}",data) }</li>
+            <li>{ format!("RedisAI: {:?}",data) }</li>
         }
     }
     fn view_fetching(&self) -> Html {
@@ -97,7 +96,7 @@ impl Component for FetchServiceExample {
         match msg {
             Msg::GetListModels => {
                 // 1. build the request
-                let request = Request::get("http://127.0.0.1:8000/api/v1/admin/models/list")
+                let request = Request::get("http://127.0.0.1:8000/api/v1/admin/models/")
                     .body(Nothing)
                     .expect("Could not build request.");
                 // 2. construct a callback
