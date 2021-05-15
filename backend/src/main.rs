@@ -2,103 +2,69 @@
 extern crate rocket;
 use rocket::State;
 
-use rocket_contrib::json::Json;
-
-use rocket_okapi::swagger_ui::{make_swagger_ui, SwaggerUIConfig};
-use rocket_okapi::{openapi, routes_with_openapi, JsonSchema};
-
 use redisai;
 use serde::{Deserialize, Serialize};
 
 use deadpool_redis::{cmd, Pool};
 
-mod admin;
+use rocket_contrib::helmet::SpaceHelmet;
+use rocket_contrib::json::Json;
 
-// use std::io::Cursor;
+mod cors;
+mod error;
+mod routes;
 
-// use rocket::http::ContentType;
-// use rocket::request::Request;
-// use rocket::response::{self, Responder, Response};
-// use thiserror::Error;
+use cors::CORS;
+use error::ApiError;
+use routes::admin;
+use routes::predict;
 
-// #[derive(Error, Debug)]
-// pub enum DataStoreError {
-//     #[error("data store disconnected")]
-//     Disconnect(#[from] std::io::Error),
-//     #[error("the data for key `{0}` is not available")]
-//     Redaction(String),
-// }
+async fn create_pool() -> Result<Pool, ApiError> {
+    let mut cfg = deadpool_redis::Config::default();
+    cfg.url = Some("redis://127.0.0.1:6379".to_string());
+    let pool = cfg
+        .create_pool()
+        .expect("Cannot create a deadpool Redis Pool");
+    Ok(pool)
+}
 
-// impl<'r> Responder<'r, 'static> for DataStoreError {
-//     fn respond_to(self, _: &'r Request<'_>) -> response::Result<'static> {
-//         match self {
-//             DataStoreError::Disconnect(_) => {
-//                 let person_string = format!("data store disconnected");
-//                 Response::build()
-//                     .sized_body(person_string.len(), Cursor::new(person_string))
-//                     .header(ContentType::new("application", "x-db"))
-//                     .ok()
-//             }
-//             DataStoreError::Redaction(s) => {
-//                 let person_string = format!("the data for key  is not available");
-//                 Response::build()
-//                     .sized_body(person_string.len(), Cursor::new(person_string))
-//                     .header(ContentType::new("application", "x-db"))
-//                     .ok()
-//             }
-//         }
-//     }
-// }
-struct AppInfo {
+pub struct AppInfo {
     app_name: &'static str,
     version: &'static str,
     start_at: std::time::Instant,
 }
-#[derive(Serialize, Deserialize, JsonSchema)]
-struct Healthcheck {
+#[derive(Serialize, Deserialize)]
+pub struct Healthcheck {
     app_name: &'static str,
     version: &'static str,
     uptime: std::time::Duration,
     redis_ready: bool,
 }
 
-async fn create_pool() -> Pool {
-    let mut cfg = deadpool_redis::Config::default();
-    cfg.url = Some("redis://127.0.0.1:6379".to_string());
-    let pool = cfg.create_pool().unwrap();
-    pool
-}
-
-#[openapi]
 #[get("/healthcheck")]
 async fn handle_healthcheck(
     app_info: State<'_, AppInfo>,
     pool: State<'_, Pool>,
-) -> Json<Healthcheck> {
-    let mut conn = pool.get().await.unwrap();
-    let reply: String = cmd("PING").query_async(&mut conn).await.unwrap();
+) -> Result<Json<Healthcheck>, ApiError> {
+    let mut conn = pool.get().await?;
+    let reply: String = cmd("PING").query_async(&mut conn).await?;
     let redis_ready = match reply.as_str() {
         "PONG" => true,
         _ => false,
     };
-    Json(Healthcheck {
+    Ok(Json(Healthcheck {
         app_name: app_info.app_name,
         version: app_info.version,
         uptime: app_info.start_at.elapsed(),
-        redis_ready: redis_ready,
-    })
-}
-
-fn get_docs() -> SwaggerUIConfig {
-    SwaggerUIConfig {
-        url: "../openapi.json".to_string(),
-        ..Default::default()
-    }
+        redis_ready,
+    }))
 }
 
 #[launch]
 async fn rocket() -> _ {
-    let pool = create_pool().await;
+    let pool = create_pool()
+        .await
+        .expect("cannot open connection to redis");
     let app_info = AppInfo {
         app_name: "speechdis",
         version: std::env!("CARGO_PKG_VERSION"),
@@ -106,12 +72,19 @@ async fn rocket() -> _ {
     };
     let redis_ai_client = redisai::RedisAIClient { debug: true };
     rocket::build()
+        .attach(CORS)
+        .attach(SpaceHelmet::default())
         .manage(app_info)
         .manage(pool)
         .manage(redis_ai_client)
+        .mount("/api/v1", routes![handle_healthcheck])
         .mount(
-            "/",
-            routes_with_openapi![handle_healthcheck, admin::upload_model],
+            "/api/v1/admin",
+            routes![
+                admin::list_models,
+                admin::get_model,
+                admin::upload_model,
+                // admin::upload_model_file
+            ],
         )
-        .mount("/docs/", make_swagger_ui(&get_docs()))
 }

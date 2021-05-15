@@ -3,5 +3,6 @@
 members = [
   "backend",
   "frontend",
+  "processing",
   "shared",
 ]
